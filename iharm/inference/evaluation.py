@@ -5,6 +5,8 @@ import cv2
 import numpy as np
 import torch
 import pandas as pd
+from albumentations import Resize
+from iharm.data.transforms import HCompose
 
 def to_image(x):
     return x[0].permute((1,2,0)).cpu().numpy() * 255
@@ -86,3 +88,44 @@ def evaluate_dataset(dataset, predictor, metrics_hub_lowres, metrics_hub_fullres
             
     df = pd.DataFrame(metric_data, columns=['Name', 'MSE', 'PSNR', 'fMSE', 'SE', 'SSIM', 'height', 'width', 'mask_area'])
     df.to_csv(str(csv_dir).replace(".log", ".csv"), mode='a', header=not os.path.exists(str(csv_dir).replace('.log', '.csv')), index=False)
+
+
+def augment_sample(sample, augmentator):
+        if augmentator is None:
+            return sample
+
+        additional_targets = {target_name: sample[target_name]
+                              for target_name in augmentator.additional_targets.keys()}
+
+        aug_output = augmentator(image=sample['image'], mask=sample['object_mask'], **additional_targets)
+
+        new_sample = dict()
+        for target_name, transformed_target in aug_output.items():
+            new_sample[target_name] = transformed_target
+
+        return new_sample
+
+
+def evaluate(image,mask, predictor):
+    normalized_mask = mask[:, :, 0].astype(np.float32) / 255.
+    bdata={
+        "image":image,
+        "object_mask":normalized_mask,
+        "target_image":image
+    }
+    sample = augment_sample(bdata, HCompose([Resize(512, 512)]))
+    sample_highres = bdata
+    image_lowres = sample['image']
+    sample_mask = sample['object_mask']
+    sample_mask_highres = sample_highres['object_mask']
+
+    pred, pred_fullres = predictor.predict(image_lowres, image, sample_mask, sample_mask_highres)
+    if pred_fullres.shape[2] ==3:
+        pred_fullres = cv2.cvtColor(pred_fullres, cv2.COLOR_RGB2RGBA)
+
+    pred_fullres[:, :, 3] = mask[:, :, 0]
+
+    return pred_fullres
+
+
+    
